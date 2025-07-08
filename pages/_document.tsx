@@ -25,10 +25,10 @@ export default function Document() {
         <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-icon-180x180.png" />
 
         {/* Social Sharing Meta Tags */}
-        <meta property="og:title" content="SMART-SAARD" />
-        <meta property="og:description" content="ระบบร้องทุกข์‑ร้องเรียน เทศบาลตำบลสะอาด (OpenDataCity)" />
-        <meta property="og:url" content="https://smart-saard.app" />
-        <meta property="og:image" content="https://smart-saard.app/smart-saard.png" />
+        <meta property="og:title" content="smart-lahansai" />
+        <meta property="og:description" content="ระบบบริการ อัจฉริยะ (OpenDataCity)" />
+        <meta property="og:url" content="https://smart-lahansai.app" />
+        <meta property="og:image" content="https://smart-lahansai.app/smart-lahansai.png" />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
