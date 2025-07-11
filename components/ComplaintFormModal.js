@@ -220,7 +220,7 @@ useEffect(() => {
                   <button
                     key={option._id}
                     type="button"
-                    className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border whitespace-nowrap ${selectedProblems.includes(option._id) ? 'bg-blue-100 text-black border-blue-300' : 'border-gray-300 text-black hover:bg-gray-100'}`}
+                    className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border whitespace-nowrap ${selectedProblems.includes(option._id) ? 'bg-pink-100 text-black border-pink-400' : 'border-gray-300 text-black hover:bg-gray-100'}`}
                     onClick={() => {
                       setSelectedProblems(prev =>
                         prev.includes(option._id)
