@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@clerk/clerk-sdk-node": "^4.13.23",
+    "@clerk/clerk-sdk-node": "^4.12.12",
     "@clerk/nextjs": "^6.20.0",
     "@headlessui/react": "^2.2.4",
     "@heroicons/react": "^2.2.0",
@@ -21,7 +21,7 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^0.511.0",
     "mongoose": "^8.15.0",
-    "next": "15.3.2",
+    "next": "^9.3.3",
     "next-cloudinary": "^6.16.0",
     "react": "^19.1.0",
     "react-compare-image": "^3.5.4",
@@ -30,7 +30,7 @@
     "react-leaflet": "^5.0.0",
     "recharts": "^2.15.3",
     "sweetalert2": "^11.21.2",
-    "swiper": "^11.2.8",
+    "swiper": "^12.2.0",
     "tailwind-merge": "^3.3.0",
     "zod": "^3.25.3",
     "zustand": "^5.0.5"
