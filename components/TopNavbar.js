@@ -10,11 +10,15 @@ const TopNavbar = () => {
     <header className="w-full min-w-[320px] bg-white/30 backdrop-blur-md border-b border-white/40 shadow-md px-4 py-4 flex items-center justify-center sticky top-0 z-50">
       <div className="absolute left-4">
         <AdminDropdownMenu
-          show={user?.publicMetadata?.role === "admin"}
+          show={["admin", "superadmin"].includes(user?.publicMetadata?.role)}
           links={[
+            { path: "/admin/dashboard", label: "📊 แดชบอร์ด" },
             { path: "/admin", label: "🛠 ตั้งค่าหน้าจอ" },
             { path: "/admin/register-user", label: "👥 จัดการผู้ใช้งาน" },
             { path: "/admin/manage-complaints", label: "📋 จัดการเรื่องร้องเรียน" },
+            { path: "/admin/settings/communities", label: "🏘 จัดการชุมชน" },
+            { path: "/admin/settings/organizations", label: "🏢 จัดการหน่วยงาน" },
+            { path: "/admin/settings/geojson-map", label: "🗺 จัดการแผนที่" },
           ]}
         />
       </div>

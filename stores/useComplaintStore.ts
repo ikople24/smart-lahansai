@@ -4,7 +4,20 @@ import axios from 'axios';
 interface Complaint {
   _id: string;
   detail: string;
-  // เพิ่ม field อื่น ๆ ตาม schema ที่ใช้
+  category: string;
+  problems: string[];
+  images: string[];
+  status: string;
+  createdAt: string;
+  updatedAt?: string;
+  completedAt?: string;
+  complaintId?: string;
+  community?: string;
+  isConfidential?: boolean;
+  pdpaSensitive?: boolean;
+  pdpaDetailRedactions?: { start: number; end: number }[];
+  pdpaPublicSanitized?: boolean;
+  location?: { lat: number; lng: number };
 }
 
 interface ComplaintState {
