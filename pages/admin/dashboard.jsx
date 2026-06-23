@@ -1,509 +1,1214 @@
-import Head from 'next/head';
-import { useEffect, useMemo, useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { FaTrophy, FaListUl, FaChartBar, FaCalendarAlt, FaArrowUp, FaArrowDown, FaDownload, FaSmileBeam } from 'react-icons/fa';
-import Link from 'next/link';
-import { useAuth } from '@clerk/nextjs';
-import { useRouter } from 'next/router';
-import { getThaiFiscalYear } from '@/lib/fiscalYear';
-import { useMenuStore } from '@/stores/useMenuStore';
-import CardModalDetail from '@/components/complaints/CardModalDetail';
+import { useEffect, useState, useMemo } from "react";
+import CardModalDetail from "@/components/complaints/CardModalDetail";
+import { useAuth } from "@clerk/nextjs";
+import { useRouter } from "next/router";
+import dynamic from "next/dynamic";
+import { useMenuStore } from "@/stores/useMenuStore";
+import { useProblemOptionStore } from "@/stores/useProblemOptionStore";
+import {
+  ChartBarIcon,
+  MapPinIcon,
+  ClockIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  UserGroupIcon,
+  StarIcon,
+  FunnelIcon,
+  ArrowTrendingUpIcon,
+  ArrowRightIcon,
+  BuildingOffice2Icon,
+  UsersIcon,
+  DocumentTextIcon,
+  CalendarDaysIcon,
+  ChevronRightIcon,
+  EyeIcon
+} from "@heroicons/react/24/outline";
+import { createProblemAreaPolygons } from "@/utils/polygonUtils";
+import { loadGeoJSONFromDB, createCommunityPolygonsFromGeoJSON, createProblemAreaPolygonsFromGeoJSON } from "@/utils/geojsonUtils";
 
-const CHART_COLORS = [
-  '#6366f1', '#3b82f6', '#10b981', '#f59e0b',
-  '#ef4444', '#a855f7', '#ec4899', '#22c55e',
-];
+const MapWithNoSSR = dynamic(() => import("@/components/AdminDashboardMap"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[600px] bg-gradient-to-br from-slate-100 to-slate-200 animate-pulse rounded-2xl flex items-center justify-center">
+      <div className="text-center">
+        <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+        <p className="text-slate-500 font-medium">กำลังโหลดแผนที่...</p>
+      </div>
+    </div>
+  ),
+});
 
-const RECENT_PAGE_SIZE = 9;
-
-const thaiMonths = [
-  { value: 1, short: 'ม.ค.', label: 'มกราคม' },
-  { value: 2, short: 'ก.พ.', label: 'กุมภาพันธ์' },
-  { value: 3, short: 'มี.ค.', label: 'มีนาคม' },
-  { value: 4, short: 'เม.ย.', label: 'เมษายน' },
-  { value: 5, short: 'พ.ค.', label: 'พฤษภาคม' },
-  { value: 6, short: 'มิ.ย.', label: 'มิถุนายน' },
-  { value: 7, short: 'ก.ค.', label: 'กรกฎาคม' },
-  { value: 8, short: 'ส.ค.', label: 'สิงหาคม' },
-  { value: 9, short: 'ก.ย.', label: 'กันยายน' },
-  { value: 10, short: 'ต.ค.', label: 'ตุลาคม' },
-  { value: 11, short: 'พ.ย.', label: 'พฤศจิกายน' },
-  { value: 12, short: 'ธ.ค.', label: 'ธันวาคม' },
-];
-
-export default function DashboardPage() {
+export default function AdminDashboard() {
   const { userId, isLoaded } = useAuth();
   const router = useRouter();
-  const { menu, fetchMenu } = useMenuStore();
-
-  const currentFiscalYearThai = getThaiFiscalYear(new Date());
-  const fiscalYearOptions = Array.from({ length: 5 }, (_, i) => String(currentFiscalYearThai - i));
-
-  const [year, setYear] = useState(String(currentFiscalYearThai));
-  const [month, setMonth] = useState('');
-  const [summary, setSummary] = useState([]);
-  const [rawData, setRawData] = useState([]);
-  const [satisfaction, setSatisfaction] = useState(null);
+  const [stats, setStats] = useState({
+    total: 0,
+    pending: 0,
+    inProgress: 0,
+    completed: 0,
+    overdue: 0,
+    satisfaction: 0,
+    byCategory: {},
+    byCommunity: {},
+    byProcessingTime: {},
+    byCategoryAndTime: {},
+    byOfficer: {},
+  });
+  const [officerNames, setOfficerNames] = useState({});
+  const [complaints, setComplaints] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modalData, setModalData] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState("ทั้งหมด");
+  const [selectedStatus, setSelectedStatus] = useState("ทั้งหมด");
+
+  const getInitialFiscalYear = () => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    if (currentMonth >= 9) return (currentYear + 543 + 1).toString();
+    return (currentYear + 543).toString();
+  };
+
+  const [dateRange, setDateRange] = useState("all");
+  const [fiscalYearFilter, setFiscalYearFilter] = useState(getInitialFiscalYear);
+  const [selectedMonth, setSelectedMonth] = useState(null);
+  const [filterMode, setFilterMode] = useState("fiscal");
+  const [selectedComplaints, setSelectedComplaints] = useState([]);
+  const [showComplaintsModal, setShowComplaintsModal] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+
+  const thaiMonths = [
+    { value: 1, label: "มกราคม", short: "ม.ค." },
+    { value: 2, label: "กุมภาพันธ์", short: "ก.พ." },
+    { value: 3, label: "มีนาคม", short: "มี.ค." },
+    { value: 4, label: "เมษายน", short: "เม.ย." },
+    { value: 5, label: "พฤษภาคม", short: "พ.ค." },
+    { value: 6, label: "มิถุนายน", short: "มิ.ย." },
+    { value: 7, label: "กรกฎาคม", short: "ก.ค." },
+    { value: 8, label: "สิงหาคม", short: "ส.ค." },
+    { value: 9, label: "กันยายน", short: "ก.ย." },
+    { value: 10, label: "ตุลาคม", short: "ต.ค." },
+    { value: 11, label: "พฤศจิกายน", short: "พ.ย." },
+    { value: 12, label: "ธันวาคม", short: "ธ.ค." },
+  ];
+
+  const getFiscalYearInfo = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    let currentFiscalYear;
+    if (currentMonth >= 9) {
+      currentFiscalYear = currentYear + 543 + 1;
+    } else {
+      currentFiscalYear = currentYear + 543;
+    }
+    const availableFiscalYears = [
+      {
+        year: currentFiscalYear - 1,
+        startDate: new Date(currentFiscalYear - 1 - 543 - 1, 9, 1),
+        endDate: new Date(currentFiscalYear - 1 - 543, 8, 30),
+        isPast: true,
+      },
+      {
+        year: currentFiscalYear,
+        startDate: new Date(currentFiscalYear - 543 - 1, 9, 1),
+        endDate: new Date(currentFiscalYear - 543, 8, 30),
+        isCurrent: true,
+      },
+    ];
+    if (currentMonth >= 6) {
+      availableFiscalYears.push({
+        year: currentFiscalYear + 1,
+        startDate: new Date(currentFiscalYear - 543, 9, 1),
+        endDate: new Date(currentFiscalYear - 543 + 1, 8, 30),
+        isNext: true,
+      });
+    }
+    return { currentFiscalYear, availableFiscalYears, currentMonth: currentMonth + 1, currentYear };
+  }, []);
+
+  const getAvailableMonths = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+    const months = [];
+    for (let i = 0; i < 24; i++) {
+      const date = new Date(currentYear, currentMonth - 1 - i, 1);
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1;
+      const buddhistYear = year + 543;
+      months.push({
+        value: `${year}-${month.toString().padStart(2, "0")}`,
+        year, month, buddhistYear,
+        label: `${thaiMonths[month - 1].short} ${buddhistYear}`,
+        fullLabel: `${thaiMonths[month - 1].label} ${buddhistYear}`,
+        isCurrent: i === 0,
+      });
+    }
+    return months;
+  }, []);
+
+  const getCurrentMonthValue = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, "0")}`;
+  }, []);
+
+  const [polygons, setPolygons] = useState([]);
+  const [geojsonData, setGeojsonData] = useState(null);
+  const [geojsonLoading, setGeojsonLoading] = useState(true);
+  const [assignments, setAssignments] = useState([]);
+  const [assignedUsersMap, setAssignedUsersMap] = useState({});
   const [recentPage, setRecentPage] = useState(1);
+  const RECENT_PAGE_SIZE = 10;
+  const [topReporters, setTopReporters] = useState([]);
+  const [pieChartData, setPieChartData] = useState([]);
+  const [activeSection, setActiveSection] = useState("overview");
 
-  const fiscalYearMonths = useMemo(() => {
-    const fyThai = Number(year);
-    if (!Number.isFinite(fyThai)) return [];
-    const fiscalGregorianYear = fyThai - 543;
-    const start = new Date(fiscalGregorianYear - 1, 9, 1);
-    return Array.from({ length: 12 }, (_, i) => {
-      const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
-      const monthNum = d.getMonth() + 1;
-      const buddhistYear = d.getFullYear() + 543;
-      const th = thaiMonths[monthNum - 1];
-      return {
-        value: `${d.getFullYear()}-${String(monthNum).padStart(2, '0')}`,
-        label: `${th.short} ${buddhistYear}`,
-        fullLabel: `${th.label} ${buddhistYear}`,
+  const { menu, fetchMenu } = useMenuStore();
+  const { problemOptions, fetchProblemOptions } = useProblemOptionStore();
+
+  useEffect(() => {
+    if (isLoaded && !userId) router.replace("/");
+  }, [isLoaded, userId]);
+
+  useEffect(() => {
+    if (userId) {
+      const loadAllData = async () => {
+        try {
+          await Promise.all([loadGeoJSONData(), fetchMenu(), fetchProblemOptions()]);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          await fetchDashboardData();
+        } catch (error) {
+          console.error("Error loading data:", error);
+        }
       };
-    });
-  }, [year]);
-
-  const selectedMonthLabel = month ? (fiscalYearMonths.find((m) => m.value === month)?.label || month) : null;
-
-  useEffect(() => {
-    if (isLoaded && !userId) {
-      router.replace('/');
+      loadAllData();
     }
-  }, [isLoaded, userId, router]);
+  }, [userId, dateRange, fiscalYearFilter, selectedMonth]);
 
-  useEffect(() => {
-    fetchMenu();
-  }, [fetchMenu]);
+  const generateCommunityPopupContent = (polygon, communityComplaints, menuData, problemOptionsData) => {
+    const total = communityComplaints.length;
+    const completed = communityComplaints.filter(
+      (c) => c.status === "completed" || c.status === "ดำเนินการเสร็จสิ้น"
+    ).length;
+    const inProgress = total - completed;
+    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  useEffect(() => {
-    setRecentPage(1);
-    setModalData(null);
-  }, [year, month]);
+    const getCategoryIcon = (categoryName) => {
+      const matched = menuData?.find((m) => m.Prob_name === categoryName);
+      return matched?.Prob_pic || null;
+    };
 
-  useEffect(() => {
-    async function fetchData() {
-      setLoading(true);
-      try {
-        const monthParam = month ? `&month=${encodeURIComponent(month)}` : '';
-        const [complaintsRes, statsRes] = await Promise.all([
-          fetch(`/api/complaints/fiscal-year?fiscalYear=${encodeURIComponent(year)}&role=admin${monthParam}`),
-          fetch(`/api/submittedreports/stats?fiscalYear=${encodeURIComponent(year)}${monthParam}`)
-        ]);
+    const getProblemOptionIcon = (problemLabel) => {
+      const cleanLabel = problemLabel.trim().toLowerCase();
+      const matched = problemOptionsData?.find((opt) => {
+        const optLabel = (opt.label || "").trim().toLowerCase();
+        return optLabel === cleanLabel || optLabel.includes(cleanLabel) || cleanLabel.includes(optLabel);
+      });
+      return matched?.iconUrl || null;
+    };
 
-        const complaintsJson = await complaintsRes.json();
-        const statsJson = await statsRes.json();
-
-        const data = complaintsJson?.success && Array.isArray(complaintsJson?.data) ? complaintsJson.data : [];
-        setSatisfaction(typeof statsJson?.satisfaction === 'number' ? statsJson.satisfaction : null);
-
-        const countByCategory = data.reduce((acc, item) => {
-          const cat = item.category || 'ไม่ระบุ';
-          acc[cat] = (acc[cat] || 0) + 1;
-          return acc;
-        }, {});
-
-        setSummary(Object.entries(countByCategory).map(([category, count]) => ({ category, count })));
-        setRawData(data);
-      } catch (error) {
-        console.error('Error fetching dashboard data:', error);
-        setSatisfaction(null);
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchData();
-  }, [year, month]);
-
-  const total = summary.reduce((sum, item) => sum + item.count, 0);
-  const topCategory = [...summary].sort((a, b) => b.count - a.count)[0]?.category || '-';
-  const categoryCount = summary.length;
-
-  const recentComplaintsSorted = useMemo(() => {
-    return [...rawData].sort((a, b) => new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0));
-  }, [rawData]);
-
-  const recentTotalPages = Math.max(1, Math.ceil(recentComplaintsSorted.length / RECENT_PAGE_SIZE));
-
-  const recentComplaintsPage = useMemo(() => {
-    const start = (recentPage - 1) * RECENT_PAGE_SIZE;
-    return recentComplaintsSorted.slice(start, start + RECENT_PAGE_SIZE);
-  }, [recentComplaintsSorted, recentPage]);
-
-  const getStatusBadgeClass = (status) => {
-    if (status === 'ดำเนินการเสร็จสิ้น') return 'badge badge-success';
-    if (status === 'อยู่ระหว่างดำเนินการ') return 'badge badge-info';
-    return 'badge badge-ghost';
-  };
-
-  const exportToCSV = () => {
-    const exportData = rawData.map((item, index) => ({
-      'ลำดับ': index + 1,
-      'รหัสคำร้อง': item.complaintId || 'ไม่ระบุ',
-      'ประเภทปัญหา': item.category || 'ไม่ระบุ',
-      'วันที่แจ้ง': item.createdAt ? new Date(item.createdAt).toLocaleDateString('th-TH') : 'ไม่ระบุ',
-      'สถานะ': item.status || 'ไม่ระบุ',
-      'รายละเอียด': item.detail || 'ไม่มีรายละเอียด',
-      'ชุมชน': item.community || 'ไม่ระบุ',
-    }));
-
-    const headers = Object.keys(exportData[0] || {});
-    const csvContent = [
-      headers.join(','),
-      ...exportData.map(row =>
-        headers.map(header => {
-          const value = row[header];
-          if (typeof value === 'string' && (value.includes(',') || value.includes('\n') || value.includes('"'))) {
-            return `"${value.replace(/"/g, '""')}"`;
+    const categoryGroups = {};
+    communityComplaints.forEach((c) => {
+      const cat = c.category || "ไม่ระบุ";
+      if (!categoryGroups[cat]) categoryGroups[cat] = { count: 0, problemCounts: {} };
+      categoryGroups[cat].count++;
+      if (c.problems && Array.isArray(c.problems)) {
+        c.problems.forEach((p) => {
+          if (p && typeof p === "string" && p.trim()) {
+            const key = p.trim();
+            categoryGroups[cat].problemCounts[key] = (categoryGroups[cat].problemCounts[key] || 0) + 1;
           }
-          return value;
-        }).join(',')
-      )
-    ].join('\n');
+        });
+      }
+    });
 
-    const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    const monthSuffix = month ? `_${month}` : '';
-    link.download = `complaints_dashboard_${year}${monthSuffix}_${new Date().toISOString().split('T')[0]}.csv`;
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const sortedCategories = Object.entries(categoryGroups).sort(([, a], [, b]) => b.count - a.count);
+
+    let topProblem = { name: "", count: 0, category: "" };
+    sortedCategories.forEach(([cat, data]) => {
+      Object.entries(data.problemCounts).forEach(([problem, count]) => {
+        if (count > topProblem.count) topProblem = { name: problem, count, category: cat };
+      });
+    });
+
+    const categoryHtml =
+      sortedCategories.length > 0
+        ? sortedCategories
+            .map(([cat, data]) => {
+              const sortedProblems = Object.entries(data.problemCounts).sort(([, a], [, b]) => b - a);
+              const catIcon = getCategoryIcon(cat);
+              const catIconHtml = catIcon
+                ? `<img src="${catIcon}" alt="${cat}" style="width:20px;height:20px;object-fit:contain;border-radius:4px;" />`
+                : "";
+              const tagsHtml =
+                sortedProblems.length > 0
+                  ? sortedProblems
+                      .slice(0, 6)
+                      .map(([problem, count]) => {
+                        const problemIcon = getProblemOptionIcon(problem);
+                        const iconHtml = problemIcon
+                          ? `<img src="${problemIcon}" alt="${problem}" style="width:14px;height:14px;object-fit:contain;" />`
+                          : "";
+                        const countBadge =
+                          count > 1
+                            ? `<span style="background:#3b82f6;color:white;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:2px;">${count}</span>`
+                            : "";
+                        return `<span style="display:inline-flex;align-items:center;gap:4px;background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #93c5fd;color:#1d4ed8;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:500;white-space:nowrap;">${iconHtml}${problem}${countBadge}</span>`;
+                      })
+                      .join("")
+                  : '<span style="font-size:11px;color:#94a3b8;font-style:italic;">ไม่มีรายละเอียดปัญหา</span>';
+              const moreCount =
+                sortedProblems.length > 6
+                  ? `<span style="display:inline-flex;align-items:center;background:#f1f5f9;color:#64748b;padding:4px 10px;border-radius:20px;font-size:10px;font-weight:500;">+${sortedProblems.length - 6} เพิ่มเติม</span>`
+                  : "";
+              return `<div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding:6px 8px;background:linear-gradient(135deg,#f8fafc,#f1f5f9);border-radius:8px;"><div style="display:flex;align-items:center;gap:6px;">${catIconHtml}<span style="font-size:12px;font-weight:600;color:#334155;">${cat}</span></div><span style="font-size:10px;font-weight:600;color:white;background:linear-gradient(135deg,#3b82f6,#2563eb);padding:2px 8px;border-radius:10px;">${data.count}</span></div><div style="display:flex;flex-wrap:wrap;gap:6px;padding-left:4px;">${tagsHtml}${moreCount}</div></div>`;
+            })
+            .join("")
+        : '<p style="font-size:12px;color:#94a3b8;text-align:center;">ไม่มีข้อมูล</p>';
+
+    const analyticsHtml =
+      total > 0
+        ? `<div style="margin-top:12px;padding:10px;background:linear-gradient(135deg,#faf5ff,#f3e8ff);border-radius:10px;border:1px solid #e9d5ff;"><p style="font-size:10px;font-weight:600;color:#7c3aed;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">📊 สรุปวิเคราะห์</p><div style="display:flex;flex-direction:column;gap:6px;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:11px;color:#6b7280;min-width:80px;">อัตราสำเร็จ:</span><div style="flex:1;height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;"><div style="width:${completionRate}%;height:100%;background:linear-gradient(90deg,#10b981,#059669);border-radius:4px;"></div></div><span style="font-size:11px;font-weight:600;color:${completionRate >= 80 ? "#059669" : completionRate >= 50 ? "#d97706" : "#dc2626"};">${completionRate}%</span></div>${topProblem.name ? `<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:white;border-radius:6px;"><span style="font-size:10px;color:#6b7280;">🔥 ปัญหาพบบ่อย:</span><span style="font-size:11px;font-weight:600;color:#dc2626;">${topProblem.name}</span><span style="font-size:9px;background:#fef2f2;color:#dc2626;padding:2px 6px;border-radius:4px;">${topProblem.count} ครั้ง</span></div>` : ""}${sortedCategories.length > 0 ? `<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:white;border-radius:6px;"><span style="font-size:10px;color:#6b7280;">📌 ประเภทหลัก:</span><span style="font-size:11px;font-weight:600;color:#2563eb;">${sortedCategories[0][0]}</span><span style="font-size:9px;background:#eff6ff;color:#2563eb;padding:2px 6px;border-radius:4px;">${Math.round((sortedCategories[0][1].count / total) * 100)}%</span></div>` : ""}<div style="display:flex;gap:8px;margin-top:4px;"><div style="flex:1;text-align:center;padding:4px;background:${inProgress > 0 ? "#fef3c7" : "#f1f5f9"};border-radius:4px;"><span style="font-size:9px;color:${inProgress > 0 ? "#92400e" : "#6b7280"};">${inProgress > 0 ? "⏳ รอดำเนินการ " + inProgress + " เรื่อง" : "✅ ไม่มีค้าง"}</span></div></div></div></div>`
+        : "";
+
+    return `<div style="min-width:300px;max-width:400px;"><div style="background:linear-gradient(135deg,${polygon.color},${polygon.color}dd);color:white;padding:12px 14px;border-radius:12px 12px 0 0;margin:-1px -1px 0 -1px;"><h3 style="margin:0;font-size:15px;font-weight:700;">🏘️ ${polygon.name}</h3></div><div style="padding:12px;"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;"><div style="text-align:center;padding:8px 4px;background:linear-gradient(135deg,#eff6ff,#dbeafe);border-radius:8px;"><div style="font-size:18px;font-weight:700;color:#3b82f6;">${total}</div><div style="font-size:9px;color:#64748b;">ทั้งหมด</div></div><div style="text-align:center;padding:8px 4px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:8px;"><div style="font-size:18px;font-weight:700;color:#d97706;">${inProgress}</div><div style="font-size:9px;color:#64748b;">ดำเนินการ</div></div><div style="text-align:center;padding:8px 4px;background:linear-gradient(135deg,#dcfce7,#bbf7d0);border-radius:8px;"><div style="font-size:18px;font-weight:700;color:#059669;">${completed}</div><div style="font-size:9px;color:#64748b;">เสร็จสิ้น</div></div></div>${total > 0 ? `<div style="max-height:300px;overflow-y:auto;padding-right:4px;"><p style="font-size:10px;font-weight:600;color:#94a3b8;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">📋 ปัญหาที่พบในชุมชน</p>${categoryHtml}${analyticsHtml}</div>` : '<p style="font-size:12px;color:#94a3b8;text-align:center;padding:12px;">✨ ไม่มีเรื่องร้องเรียนในชุมชนนี้</p>'}</div></div>`;
   };
+
+  useEffect(() => {
+    if (!geojsonLoading && geojsonData && complaints.length >= 0 && menu && problemOptions) {
+      const communityPolygons = createCommunityPolygonsFromGeoJSON(geojsonData, {
+        fillOpacity: 0.15,
+        weight: 2,
+        customPopupContent: (polygon) => {
+          const communityComplaints = complaints.filter(
+            (c) => c.community === polygon.name || c.community === polygon.boundaryor
+          );
+          return generateCommunityPopupContent(polygon, communityComplaints, menu, problemOptions);
+        },
+      });
+      setPolygons(communityPolygons);
+    } else if (!geojsonLoading && !geojsonData && complaints.length > 0) {
+      const problemAreaPolygons = createProblemAreaPolygons(complaints, 3);
+      setPolygons(problemAreaPolygons);
+    }
+  }, [geojsonLoading, geojsonData, complaints, menu, problemOptions]);
+
+  const loadGeoJSONData = async () => {
+    try {
+      setGeojsonLoading(true);
+      const data = await loadGeoJSONFromDB();
+      setGeojsonData(data);
+    } catch (error) {
+      console.error("Error loading GeoJSON data:", error);
+    } finally {
+      setGeojsonLoading(false);
+    }
+  };
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+
+      const complaintsRes = await fetch(`/api/complaints?role=admin`);
+      const complaintsData = await complaintsRes.json();
+
+      let satisfactionData = { averageRating: 0 };
+      try {
+        const satisfactionRes = await fetch("/api/satisfaction/stats");
+        if (satisfactionRes.ok) satisfactionData = await satisfactionRes.json();
+      } catch (e) {}
+
+      let assignmentsArr = [];
+      try {
+        const assignmentsRes = await fetch(`/api/assignments`);
+        if (assignmentsRes.ok) assignmentsArr = await assignmentsRes.json();
+      } catch (e) {}
+
+      const namesMap = {};
+      setAssignments(Array.isArray(assignmentsArr) ? assignmentsArr : []);
+      setOfficerNames(namesMap);
+
+      const filteredComplaints = filterComplaintsByDateRange(complaintsData, dateRange, fiscalYearFilter, selectedMonth);
+      const filteredAssignments = filterAssignmentsByDateRange(
+        Array.isArray(assignmentsArr) ? assignmentsArr : [],
+        dateRange, fiscalYearFilter, selectedMonth
+      );
+
+      const calculatedStats = calculateStats(filteredComplaints, satisfactionData, filteredAssignments);
+      setComplaints(filteredComplaints);
+      setStats(calculatedStats);
+
+      setTopReporters(calculateTopReporters(filteredComplaints));
+      setPieChartData(calculatePieChartData(filteredComplaints));
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filterComplaintsByDateRange = (complaints, range, fiscalYear = null, month = null) => {
+    const now = new Date();
+    return complaints.filter((complaint) => {
+      const complaintDate = new Date(complaint.timestamp || complaint.createdAt);
+      if (month) {
+        const [year, monthNum] = month.split("-").map(Number);
+        const monthStart = new Date(year, monthNum - 1, 1);
+        const monthEnd = new Date(year, monthNum, 0, 23, 59, 59);
+        return complaintDate >= monthStart && complaintDate <= monthEnd;
+      }
+      if (fiscalYear) {
+        const fyYear = parseInt(fiscalYear);
+        const gregorianYear = fyYear - 543;
+        const fiscalStart = new Date(gregorianYear - 1, 9, 1);
+        const fiscalEnd = new Date(gregorianYear, 8, 30, 23, 59, 59);
+        if (complaintDate < fiscalStart || complaintDate > fiscalEnd) return false;
+        if (range === "all") return true;
+      }
+      switch (range) {
+        case "7d": return (now - complaintDate) <= 7 * 24 * 60 * 60 * 1000;
+        case "30d": return (now - complaintDate) <= 30 * 24 * 60 * 60 * 1000;
+        case "90d": return (now - complaintDate) <= 90 * 24 * 60 * 60 * 1000;
+        default: return true;
+      }
+    });
+  };
+
+  const filterAssignmentsByDateRange = (assignments, range, fiscalYear = null, month = null) => {
+    if (!assignments || !Array.isArray(assignments)) return [];
+    const now = new Date();
+    return assignments.filter((assignment) => {
+      const assignmentDate = new Date(assignment.completedAt || assignment.assignedAt || assignment.createdAt);
+      if (month) {
+        const [year, monthNum] = month.split("-").map(Number);
+        const monthStart = new Date(year, monthNum - 1, 1);
+        const monthEnd = new Date(year, monthNum, 0, 23, 59, 59);
+        return assignmentDate >= monthStart && assignmentDate <= monthEnd;
+      }
+      if (fiscalYear) {
+        const fyYear = parseInt(fiscalYear);
+        const gregorianYear = fyYear - 543;
+        const fiscalStart = new Date(gregorianYear - 1, 9, 1);
+        const fiscalEnd = new Date(gregorianYear, 8, 30, 23, 59, 59);
+        if (assignmentDate < fiscalStart || assignmentDate > fiscalEnd) return false;
+        if (range === "all") return true;
+      }
+      switch (range) {
+        case "7d": return (now - assignmentDate) <= 7 * 24 * 60 * 60 * 1000;
+        case "30d": return (now - assignmentDate) <= 30 * 24 * 60 * 60 * 1000;
+        case "90d": return (now - assignmentDate) <= 90 * 24 * 60 * 60 * 1000;
+        default: return true;
+      }
+    });
+  };
+
+  const filterComplaintsByCategoryAndTime = (category, timeCategory) => {
+    return complaints.filter((complaint) => {
+      if (complaint.category !== category) return false;
+      if (complaint.status === "completed" || complaint.status === "ดำเนินการเสร็จสิ้น") {
+        const createdAt = new Date(complaint.timestamp || complaint.createdAt);
+        const completedAt = new Date(complaint.completedAt || complaint.updatedAt);
+        const hours = (completedAt - createdAt) / (1000 * 60 * 60);
+        let tc;
+        if (hours <= 24) tc = "≤ 24 ชม.";
+        else if (hours <= 48) tc = "1-2 วัน";
+        else if (hours <= 72) tc = "2-3 วัน";
+        else if (hours <= 168) tc = "3-7 วัน";
+        else if (hours <= 360) tc = "7-15 วัน";
+        else tc = "> 15 วัน";
+        return tc === timeCategory;
+      }
+      return false;
+    });
+  };
+
+  const handleShowComplaints = (category, timeCategory) => {
+    const filtered = filterComplaintsByCategoryAndTime(category, timeCategory);
+    setSelectedComplaints(filtered);
+    setModalTitle(`${category} - ${timeCategory} (${filtered.length} เรื่อง)`);
+    setShowComplaintsModal(true);
+  };
+
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [selectedComplaintDetail, setSelectedComplaintDetail] = useState(null);
+  const openDetailModal = (complaint) => { setSelectedComplaintDetail(complaint); setShowDetailModal(true); };
+  const closeDetailModal = () => { setShowDetailModal(false); setSelectedComplaintDetail(null); };
+
+  const calculateTopReporters = (complaints) => {
+    const phoneCounts = {};
+    complaints.forEach((complaint) => {
+      if (complaint.phone && complaint.fullName) {
+        const phone = complaint.phone.trim();
+        const name = complaint.fullName.trim();
+        if (phone && name) {
+          if (!phoneCounts[phone]) phoneCounts[phone] = { phone, name, count: 0, complaints: [] };
+          phoneCounts[phone].count++;
+          phoneCounts[phone].complaints.push(complaint);
+        }
+      }
+    });
+    return Object.values(phoneCounts).sort((a, b) => b.count - a.count).slice(0, 5);
+  };
+
+  const calculatePieChartData = (complaints) => {
+    const uniqueReporters = new Set();
+    const categoryCounts = {};
+    complaints.forEach((complaint) => {
+      if (complaint.phone && complaint.fullName) {
+        uniqueReporters.add(`${complaint.phone.trim()}_${complaint.fullName.trim()}`);
+        if (complaint.category) categoryCounts[complaint.category] = (categoryCounts[complaint.category] || 0) + 1;
+      }
+    });
+    const colors = ["#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#10b981", "#f59e0b", "#ef4444", "#6366f1", "#14b8a6", "#f97316"];
+    const pieData = Object.entries(categoryCounts)
+      .sort(([, a], [, b]) => b - a)
+      .map(([category, count], index) => ({
+        name: category,
+        value: count,
+        color: colors[index % colors.length],
+        percentage: ((count / complaints.length) * 100).toFixed(1),
+      }));
+    return { totalUniqueReporters: uniqueReporters.size, totalComplaints: complaints.length, pieData };
+  };
+
+  const calculateStats = (complaints, satisfactionData, assignmentsData) => {
+    const stats = {
+      total: complaints.length,
+      inProgress: 0,
+      completed: 0,
+      overdue: 0,
+      satisfaction: satisfactionData.averageRating || 0,
+      byCategory: {},
+      byCommunity: {},
+      byProcessingTime: {},
+      byCategoryAndTime: {},
+      byOfficer: {},
+    };
+
+    complaints.forEach((complaint) => {
+      switch (complaint.status) {
+        case "in_progress":
+        case "อยู่ระหว่างดำเนินการ":
+          stats.inProgress++;
+          break;
+        case "completed":
+        case "ดำเนินการเสร็จสิ้น":
+          stats.completed++;
+          break;
+        default:
+          stats.inProgress++;
+      }
+
+      const complaintDate = new Date(complaint.timestamp || complaint.createdAt);
+      const daysSince = (new Date() - complaintDate) / (1000 * 60 * 60 * 24);
+      if (daysSince > 7 && complaint.status !== "completed" && complaint.status !== "ดำเนินการเสร็จสิ้น") stats.overdue++;
+
+      const category = complaint.category || "ไม่ระบุ";
+      stats.byCategory[category] = (stats.byCategory[category] || 0) + 1;
+
+      const community = complaint.community || "ไม่ระบุ";
+      stats.byCommunity[community] = (stats.byCommunity[community] || 0) + 1;
+
+      if (complaint.status === "completed" || complaint.status === "ดำเนินการเสร็จสิ้น") {
+        const startDate = new Date(complaint.timestamp || complaint.createdAt);
+        const endDate = new Date(complaint.updatedAt || complaint.timestamp || complaint.createdAt);
+        const hours = Math.floor((endDate - startDate) / (1000 * 60 * 60));
+        let tc;
+        if (hours <= 24) tc = "≤ 24 ชม.";
+        else if (hours <= 48) tc = "1-2 วัน";
+        else if (hours <= 72) tc = "2-3 วัน";
+        else if (hours <= 168) tc = "3-7 วัน";
+        else if (hours <= 360) tc = "7-15 วัน";
+        else tc = "> 15 วัน";
+        stats.byProcessingTime[tc] = (stats.byProcessingTime[tc] || 0) + 1;
+        if (!stats.byCategoryAndTime[category]) stats.byCategoryAndTime[category] = {};
+        stats.byCategoryAndTime[category][tc] = (stats.byCategoryAndTime[category][tc] || 0) + 1;
+      }
+    });
+
+    assignmentsData.forEach((assignment) => {
+      if (assignment.userId && assignment.completedAt) {
+        const id = assignment.userId.toString();
+        if (!stats.byOfficer[id]) stats.byOfficer[id] = { totalAssigned: 0, totalCompleted: 0, totalProcessingTime: 0, averageProcessingTime: 0, fastCompletions: 0, mediumCompletions: 0, slowCompletions: 0 };
+        stats.byOfficer[id].totalAssigned++;
+        stats.byOfficer[id].totalCompleted++;
+        const hours = Math.max(0, Math.floor((new Date(assignment.completedAt) - new Date(assignment.assignedAt)) / (1000 * 60 * 60)));
+        stats.byOfficer[id].totalProcessingTime += hours;
+        if (hours <= 24) stats.byOfficer[id].fastCompletions++;
+        else if (hours <= 168) stats.byOfficer[id].mediumCompletions++;
+        else stats.byOfficer[id].slowCompletions++;
+      } else if (assignment.userId) {
+        const id = assignment.userId.toString();
+        if (!stats.byOfficer[id]) stats.byOfficer[id] = { totalAssigned: 0, totalCompleted: 0, totalProcessingTime: 0, averageProcessingTime: 0, fastCompletions: 0, mediumCompletions: 0, slowCompletions: 0 };
+        stats.byOfficer[id].totalAssigned++;
+      }
+    });
+
+    Object.keys(stats.byOfficer).forEach((id) => {
+      const o = stats.byOfficer[id];
+      if (o.totalCompleted > 0) {
+        o.averageProcessingTime = Math.round(o.totalProcessingTime / o.totalCompleted);
+        const completionRate = Math.min(100, (o.totalCompleted / o.totalAssigned) * 100);
+        const speedScore = o.averageProcessingTime <= 0 ? 100 : o.averageProcessingTime <= 24 ? 100 : Math.max(0, Math.min(100, 100 - ((o.averageProcessingTime - 24) / 24) * 20));
+        const volumeBonus = o.totalAssigned >= 20 ? 20 : o.totalAssigned >= 10 ? 15 : o.totalAssigned >= 5 ? 10 : 0;
+        o.performanceScore = Math.min(100, Math.round(completionRate * 0.4 + speedScore * 0.4 + volumeBonus * 0.2));
+      } else {
+        o.averageProcessingTime = 0;
+        o.performanceScore = 0;
+      }
+    });
+
+    return stats;
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case "in_progress":
+      case "อยู่ระหว่างดำเนินการ":
+        return "badge-in-progress";
+      case "completed":
+      case "ดำเนินการเสร็จสิ้น":
+        return "badge-completed";
+      default:
+        return "badge-in-progress";
+    }
+  };
+
+  const getStatusText = (status) => {
+    switch (status) {
+      case "in_progress":
+      case "อยู่ระหว่างดำเนินการ":
+        return "ดำเนินการ";
+      case "completed":
+      case "ดำเนินการเสร็จสิ้น":
+        return "เสร็จสิ้น";
+      default:
+        return "ดำเนินการ";
+    }
+  };
+
+  const filteredComplaints = useMemo(() => {
+    return complaints.filter((complaint) => {
+      const categoryMatch = selectedCategory === "ทั้งหมด" || complaint.category === selectedCategory;
+      const statusMatch =
+        selectedStatus === "ทั้งหมด" ||
+        (selectedStatus === "in_progress" && (complaint.status === "in_progress" || complaint.status === "อยู่ระหว่างดำเนินการ")) ||
+        (selectedStatus === "completed" && (complaint.status === "completed" || complaint.status === "ดำเนินการเสร็จสิ้น"));
+      return categoryMatch && statusMatch;
+    });
+  }, [complaints, selectedCategory, selectedStatus]);
+
+  const completionRate = useMemo(() => {
+    return stats.total > 0 ? ((stats.completed / stats.total) * 100).toFixed(1) : 0;
+  }, [stats]);
 
   if (!isLoaded || !userId) {
-    return <div className="text-center p-8">กำลังโหลด...</div>;
-  }
-
-  if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
         <div className="text-center">
-          <div className="loading loading-spinner loading-lg text-primary mb-4"></div>
-          <p className="text-lg text-gray-600">กำลังโหลดข้อมูล...</p>
+          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-300">กำลังตรวจสอบสิทธิ์...</p>
         </div>
       </div>
     );
   }
 
-  return (
-    <>
-      <Head>
-        <title>Smart-Lahansai | แดชบอร์ด</title>
-      </Head>
-
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 md:p-6">
-        <div className="max-w-7xl mx-auto">
-
-          {/* Header */}
-          <div className="mb-8">
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-              <div>
-                <h1 className="text-3xl font-bold text-gray-800 mb-2">
-                  📊 แดชบอร์ด
-                </h1>
-                <p className="text-gray-600">วิเคราะห์ข้อมูลการร้องเรียนประจำปีงบประมาณ</p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2">
-                  <FaCalendarAlt className="text-primary" />
-                  <label className="text-sm font-medium text-gray-700">ปีงบประมาณ:</label>
-                  <select
-                    className="select select-bordered select-sm w-28 bg-white"
-                    value={year}
-                    onChange={(e) => setYear(e.target.value)}
-                  >
-                    {fiscalYearOptions.map((fy) => (
-                      <option key={fy} value={fy}>{fy}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">เดือน:</label>
-                  <select
-                    className="select select-bordered select-sm w-40 bg-white"
-                    value={month}
-                    onChange={(e) => setMonth(e.target.value)}
-                  >
-                    <option value="">ทั้งปีงบประมาณ</option>
-                    {fiscalYearMonths.map((m) => (
-                      <option key={m.value} value={m.value}>{m.fullLabel}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <button
-                  onClick={exportToCSV}
-                  className="btn btn-sm gap-2 bg-green-600 hover:bg-green-700 text-white border-none"
-                  disabled={rawData.length === 0}
-                >
-                  <FaDownload />
-                  Export ({rawData.length})
-                </button>
-              </div>
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+        <div className="max-w-[1800px] mx-auto p-6">
+          <div className="animate-pulse space-y-6">
+            <div className="h-32 bg-slate-200 rounded-2xl"></div>
+            <div className="grid grid-cols-4 gap-6">
+              {[1, 2, 3, 4].map((i) => <div key={i} className="h-36 bg-slate-200 rounded-2xl"></div>)}
             </div>
+            <div className="h-[500px] bg-slate-200 rounded-2xl"></div>
           </div>
+        </div>
+      </div>
+    );
+  }
 
-          {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div className="card bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-xl">
-              <div className="card-body py-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm opacity-90 mb-1">รวมรายการทั้งหมด</p>
-                    <p className="text-3xl font-bold">{total.toLocaleString()}</p>
-                    <p className="text-xs opacity-80 mt-1 flex items-center gap-1">
-                      <FaArrowUp className="text-green-300" />
-                      {selectedMonthLabel || `ปีงบ ${year}`}
-                    </p>
-                  </div>
-                  <FaListUl className="text-4xl opacity-70" />
-                </div>
-              </div>
-            </div>
-
-            <div className="card bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-xl">
-              <div className="card-body py-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm opacity-90 mb-1">ประเภทที่แจ้งมากที่สุด</p>
-                    <p className="text-lg font-bold truncate max-w-[140px]">{topCategory}</p>
-                    <p className="text-xs opacity-80 mt-1 flex items-center gap-1">
-                      <FaChartBar className="text-yellow-300" />
-                      อันดับ 1
-                    </p>
-                  </div>
-                  <FaTrophy className="text-4xl opacity-70" />
-                </div>
-              </div>
-            </div>
-
-            <div className="card bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-xl">
-              <div className="card-body py-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm opacity-90 mb-1">จำนวนประเภทปัญหา</p>
-                    <p className="text-3xl font-bold">{categoryCount}</p>
-                    <p className="text-xs opacity-80 mt-1 flex items-center gap-1">
-                      <FaArrowDown className="text-pink-300" />
-                      ประเภท
-                    </p>
-                  </div>
-                  <FaChartBar className="text-4xl opacity-70" />
-                </div>
-              </div>
-            </div>
-
-            <div className="card bg-gradient-to-r from-cyan-500 to-cyan-600 text-white shadow-xl">
-              <div className="card-body py-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm opacity-90 mb-1">ความพึงพอใจรวม</p>
-                    <p className="text-3xl font-bold">{satisfaction !== null ? `${satisfaction}%` : '-'}</p>
-                    <p className="text-xs opacity-80 mt-1 flex items-center gap-1">
-                      <FaArrowUp className="text-emerald-200" />
-                      {selectedMonthLabel || `ปีงบ ${year}`}
-                    </p>
-                  </div>
-                  <FaSmileBeam className="text-4xl opacity-70" />
-                </div>
-              </div>
-            </div>
+  const ComplaintsModal = () => {
+    if (!showComplaintsModal) return null;
+    return (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between p-6 border-b bg-gradient-to-r from-slate-50 to-white">
+            <h3 className="text-xl font-bold text-slate-800">{modalTitle}</h3>
+            <button onClick={() => setShowComplaintsModal(false)} className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors">
+              <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
-
-          {/* Chart + Category List */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-            {/* Bar Chart */}
-            <div className="lg:col-span-2">
-              <div className="card bg-white shadow-xl">
-                <div className="card-body">
-                  <h3 className="card-title text-gray-800 mb-4">
-                    📈 จำนวนร้องเรียนตามประเภทปัญหา
-                  </h3>
-                  {summary.length === 0 ? (
-                    <div className="h-72 flex items-center justify-center text-gray-400">
-                      ไม่มีข้อมูลในช่วงที่เลือก
-                    </div>
-                  ) : (
-                    <div className="h-72">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={summary.sort((a, b) => b.count - a.count)} margin={{ top: 5, right: 10, left: 0, bottom: 60 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                          <XAxis
-                            dataKey="category"
-                            tick={{ fontSize: 11 }}
-                            angle={-35}
-                            textAnchor="end"
-                            interval={0}
-                          />
-                          <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
-                          <Tooltip
-                            formatter={(value) => [`${value} รายการ`, 'จำนวน']}
-                            contentStyle={{ borderRadius: 8, fontSize: 13 }}
-                          />
-                          <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                            {summary.map((_, index) => (
-                              <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </div>
+          <div className="flex-1 overflow-y-auto p-6 dashboard-scroll">
+            {selectedComplaints.length === 0 ? (
+              <div className="text-center py-12">
+                <DocumentTextIcon className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+                <p className="text-slate-500">ไม่พบเรื่องร้องเรียนที่ตรงกับเงื่อนไข</p>
               </div>
-            </div>
-
-            {/* Category Ranking List */}
-            <div className="lg:col-span-1">
-              <div className="card bg-white shadow-xl">
-                <div className="card-body">
-                  <h3 className="card-title text-gray-800 mb-4">
-                    📋 รายการประเภทปัญหา
-                  </h3>
-                  {summary.length === 0 ? (
-                    <p className="text-gray-400 text-sm text-center py-8">ไม่มีข้อมูล</p>
-                  ) : (
-                    <div className="space-y-3 overflow-y-auto max-h-64">
-                      {[...summary].sort((a, b) => b.count - a.count).map((item, index) => (
-                        <div key={item.category} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
-                          <div className="flex items-center gap-3">
-                            <div
-                              className="w-3 h-3 rounded-full flex-shrink-0"
-                              style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
-                            />
-                            <div>
-                              <p className="font-medium text-gray-800 text-sm truncate max-w-[120px]">{item.category}</p>
-                              <p className="text-xs text-gray-500">{total > 0 ? ((item.count / total) * 100).toFixed(1) : 0}%</p>
-                            </div>
+            ) : (
+              <div className="space-y-4">
+                {selectedComplaints.map((complaint, index) => {
+                  const createdAt = new Date(complaint.timestamp || complaint.createdAt);
+                  const completedAt = new Date(complaint.completedAt || complaint.updatedAt);
+                  const processingTimeHours = (completedAt - createdAt) / (1000 * 60 * 60);
+                  const titleText = complaint.title?.trim() || complaint.detail?.trim() || complaint.problems?.[0] || "ไม่มีหัวข้อ";
+                  return (
+                    <div key={complaint._id} className="border border-slate-200 rounded-xl p-5 hover:bg-slate-50 cursor-pointer transition-all hover:shadow-lg hover:border-blue-200 group" onClick={() => openDetailModal(complaint)}>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-3 mb-3">
+                            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-100 text-slate-600 text-sm font-bold">#{index + 1}</span>
+                            <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700">{complaint.community || "ไม่ระบุชุมชน"}</span>
                           </div>
-                          <div className="text-right">
-                            <p className="font-bold text-lg text-gray-800">{item.count}</p>
-                            <p className="text-xs text-gray-500">รายการ</p>
+                          <h4 className="font-semibold text-slate-800 mb-2 group-hover:text-blue-600 transition-colors line-clamp-1">{titleText}</h4>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                            <div><span className="text-slate-400 text-xs">วันที่แจ้ง</span><p className="font-medium text-slate-700">{createdAt.toLocaleDateString("th-TH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p></div>
+                            <div><span className="text-slate-400 text-xs">วันที่เสร็จ</span><p className="font-medium text-slate-700">{completedAt.toLocaleDateString("th-TH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p></div>
+                            <div><span className="text-slate-400 text-xs">ระยะเวลา</span><p className="font-medium text-slate-700">{processingTimeHours <= 24 ? `${Math.round(processingTimeHours)} ชม.` : `${Math.round(processingTimeHours / 24)} วัน`}</p></div>
+                            <div><span className="text-slate-400 text-xs">ชุมชน</span><p className="font-medium text-slate-700">{complaint.community || "ไม่ระบุ"}</p></div>
                           </div>
                         </div>
-                      ))}
+                        <div className="badge-completed flex items-center gap-1.5"><CheckCircleIcon className="w-4 h-4" />เสร็จสิ้น</div>
+                      </div>
                     </div>
-                  )}
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-between p-4 border-t bg-slate-50">
+            <span className="text-sm text-slate-500">แสดง {selectedComplaints.length} เรื่อง</span>
+            <button onClick={() => setShowComplaintsModal(false)} className="px-6 py-2.5 bg-slate-800 text-white rounded-xl hover:bg-slate-700 transition-colors font-medium">ปิด</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-100">
+      <div className="max-w-[1800px] mx-auto p-4 lg:p-6 space-y-6">
+
+        {/* Header */}
+        <div className="dashboard-header">
+          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
+                  <ChartBarIcon className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-2xl lg:text-3xl font-bold">แดชบอร์ดผู้ดูแลระบบ</h1>
+                  <p className="text-blue-200 text-sm">ภาพรวมและสถิติการดำเนินงาน</p>
                 </div>
               </div>
             </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => router.push("/admin/manage-complaints")} className="px-5 py-2.5 bg-white/10 backdrop-blur border border-white/20 text-white rounded-xl hover:bg-white/20 transition-all font-medium flex items-center gap-2">
+                <DocumentTextIcon className="w-5 h-5" />จัดการเรื่องร้องเรียน<ChevronRightIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter Bar */}
+        <div className="dashboard-section p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex bg-slate-100 rounded-lg p-1">
+              <button onClick={() => { setFilterMode("fiscal"); setSelectedMonth(null); setDateRange("all"); if (!fiscalYearFilter) setFiscalYearFilter(getFiscalYearInfo.currentFiscalYear.toString()); }} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all ${filterMode === "fiscal" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>📊 ปีงบประมาณ</button>
+              <button onClick={() => { setFilterMode("month"); setFiscalYearFilter(null); setDateRange("all"); if (!selectedMonth) setSelectedMonth(getCurrentMonthValue); }} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all ${filterMode === "month" ? "bg-white text-violet-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>📅 รายเดือน</button>
+              <button onClick={() => { setFilterMode("quick"); setFiscalYearFilter(null); setSelectedMonth(null); }} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all ${filterMode === "quick" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>⚡ ช่วงเวลา</button>
+            </div>
+
+            {filterMode === "fiscal" && (
+              <div className="flex items-center gap-2">
+                <select value={fiscalYearFilter || ""} onChange={(e) => { setFiscalYearFilter(e.target.value); setSelectedMonth(null); setDateRange("all"); }} className="px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 border-2 border-emerald-200 rounded-xl text-emerald-700 font-medium text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 cursor-pointer">
+                  {getFiscalYearInfo.availableFiscalYears.map((fy) => (
+                    <option key={fy.year} value={fy.year.toString()}>ปีงบ {fy.year} {fy.isCurrent ? "(ปัจจุบัน)" : fy.isNext ? "(ถัดไป)" : ""}</option>
+                  ))}
+                </select>
+                {fiscalYearFilter && <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">1 ต.ค. {parseInt(fiscalYearFilter) - 1} - 30 ก.ย. {fiscalYearFilter}</span>}
+              </div>
+            )}
+
+            {filterMode === "month" && (
+              <select value={selectedMonth || ""} onChange={(e) => { setSelectedMonth(e.target.value); setFiscalYearFilter(null); setDateRange("all"); }} className="px-4 py-2 bg-gradient-to-r from-violet-50 to-purple-50 border-2 border-violet-200 rounded-xl text-violet-700 font-medium text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 cursor-pointer">
+                {getAvailableMonths.map((m) => (<option key={m.value} value={m.value}>{m.fullLabel} {m.isCurrent ? "(เดือนนี้)" : ""}</option>))}
+              </select>
+            )}
+
+            {filterMode === "quick" && (
+              <div className="flex items-center gap-2">
+                {[{ value: "7d", label: "7 วัน" }, { value: "30d", label: "30 วัน" }, { value: "90d", label: "90 วัน" }, { value: "all", label: "ทั้งหมด" }].map((r) => (
+                  <button key={r.value} onClick={() => { setDateRange(r.value); setFiscalYearFilter(null); setSelectedMonth(null); }} className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-all ${dateRange === r.value && filterMode === "quick" ? "bg-blue-500 text-white shadow-md" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{r.label}</button>
+                ))}
+              </div>
+            )}
+
+            <div className="ml-auto">
+              <div className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full ${filterMode === "fiscal" ? "bg-emerald-100 text-emerald-700" : filterMode === "month" ? "bg-violet-100 text-violet-700" : "bg-blue-100 text-blue-700"}`}>
+                <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>
+                <span className="font-medium">
+                  {filterMode === "fiscal" && fiscalYearFilter && `ปีงบ ${fiscalYearFilter}`}
+                  {filterMode === "month" && selectedMonth && getAvailableMonths.find((m) => m.value === selectedMonth)?.label}
+                  {filterMode === "quick" && (dateRange === "7d" ? "7 วันล่าสุด" : dateRange === "30d" ? "30 วันล่าสุด" : dateRange === "90d" ? "90 วันล่าสุด" : "ทั้งหมด")}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-4 gap-4 lg:gap-6">
+          <div className="stat-card stat-gradient-blue rounded-2xl p-5 text-white">
+            <div className="flex items-start justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center"><DocumentTextIcon className="w-6 h-6" /></div>
+              <ArrowTrendingUpIcon className="w-5 h-5 opacity-60" />
+            </div>
+            <p className="text-blue-100 text-sm mb-1">เรื่องทั้งหมด</p>
+            <p className="text-4xl font-bold tracking-tight counter-number">{stats.total}</p>
           </div>
 
-          {/* Recent Complaints */}
-          <div className="card bg-white shadow-xl mb-8">
-            <div className="card-body">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="card-title text-gray-800">🕒 รายการปัญหาล่าสุด</h3>
-                  <p className="text-sm text-gray-600">
-                    {selectedMonthLabel ? `ช่วง: ${selectedMonthLabel}` : `ปีงบประมาณ ${year}`} • พบ {recentComplaintsSorted.length.toLocaleString()} รายการ
-                  </p>
-                </div>
-                <Link href="/admin/manage-complaints" className="btn btn-outline btn-sm">
-                  ไปหน้าจัดการเรื่องร้องเรียน →
-                </Link>
+          <div className="stat-card stat-gradient-cyan rounded-2xl p-5 text-white">
+            <div className="flex items-start justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center"><ClockIcon className="w-6 h-6" /></div>
+            </div>
+            <p className="text-cyan-100 text-sm mb-1">กำลังดำเนินการ</p>
+            <p className="text-4xl font-bold tracking-tight counter-number">{stats.inProgress}</p>
+          </div>
+
+          <div className="stat-card stat-gradient-green rounded-2xl p-5 text-white">
+            <div className="flex items-start justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center"><CheckCircleIcon className="w-6 h-6" /></div>
+              <span className="text-xs bg-white/20 px-2 py-1 rounded-full">{completionRate}%</span>
+            </div>
+            <p className="text-emerald-100 text-sm mb-1">เสร็จสิ้น</p>
+            <p className="text-4xl font-bold tracking-tight counter-number">{stats.completed}</p>
+          </div>
+
+          <div className={`stat-card stat-gradient-red rounded-2xl p-5 text-white ${stats.overdue > 0 ? "pulse-alert" : ""}`}>
+            <div className="flex items-start justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center"><ExclamationTriangleIcon className="w-6 h-6" /></div>
+            </div>
+            <p className="text-red-100 text-sm mb-1">เกินกำหนด</p>
+            <p className="text-4xl font-bold tracking-tight counter-number">{stats.overdue}</p>
+          </div>
+        </div>
+
+        {/* Map Section */}
+        <div className="dashboard-section p-6">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center"><MapPinIcon className="w-5 h-5 text-rose-600" /></div>
+              <div>
+                <h3 className="font-semibold text-slate-800">แผนที่แสดงตำแหน่งปัญหา</h3>
+                <p className="text-sm text-slate-500">
+                  แสดง {filteredComplaints.filter((c) => c.location?.lat && c.location?.lng).length} ตำแหน่ง จาก {filteredComplaints.length} รายการ
+                  {!geojsonLoading && geojsonData?.features && <span className="text-emerald-600 ml-2">• {geojsonData.features.length} ชุมชน</span>}
+                </p>
               </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {geojsonLoading && <div className="flex items-center gap-2 text-sm text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg"><div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>โหลด...</div>}
+              <div className="flex items-center gap-2">
+                <FunnelIcon className="w-4 h-4 text-slate-400" />
+                <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all min-w-[140px]">
+                  <option value="ทั้งหมด">ประเภท: ทั้งหมด</option>
+                  {Object.keys(stats.byCategory).map((category) => (<option key={category} value={category}>{category} ({stats.byCategory[category]})</option>))}
+                </select>
+              </div>
+              <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all min-w-[140px]">
+                <option value="ทั้งหมด">สถานะ: ทั้งหมด</option>
+                <option value="in_progress">อยู่ระหว่างดำเนินการ</option>
+                <option value="completed">ดำเนินการเสร็จสิ้น</option>
+              </select>
+            </div>
+          </div>
+          <div className="map-container-modern">
+            <MapWithNoSSR complaints={filteredComplaints} polygons={polygons} assignments={assignments} />
+          </div>
+        </div>
 
-              {recentComplaintsSorted.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">ไม่พบข้อมูลในช่วงที่เลือก</div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {recentComplaintsPage.map((item) => {
-                      const createdAt = new Date(item?.createdAt || Date.now());
-                      const imageUrl = Array.isArray(item?.images) ? item.images[0] : null;
-                      const categoryIcon = menu?.find((m) => m.Prob_name === item?.category)?.Prob_pic;
-                      const canOpenModal = Boolean(item?.complaintId && item?.category);
+        {/* Statistics Grid */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {/* Category Statistics */}
+          <div className="dashboard-section p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center"><ChartBarIcon className="w-5 h-5 text-indigo-600" /></div>
+              <h3 className="font-semibold text-slate-800">สถิติตามประเภทปัญหา</h3>
+            </div>
+            <div className="space-y-4 max-h-[400px] overflow-y-auto dashboard-scroll pr-2">
+              {Object.entries(stats.byCategory).sort(([, a], [, b]) => b - a).map(([category, count]) => {
+                const categoryIcon = menu.find((m) => m.Prob_name === category)?.Prob_pic;
+                const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0;
+                return (
+                  <div key={category} className="group">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        {categoryIcon && <img src={categoryIcon} alt={category} className="w-6 h-6 object-contain" />}
+                        <span className="text-sm font-medium text-slate-700">{category}</span>
+                      </div>
+                      <span className="text-sm font-bold text-slate-800">{count}</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500 progress-bar" style={{ width: `${percentage}%` }}></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
+          {/* Community Statistics — dynamic */}
+          <div className="dashboard-section p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-teal-50 flex items-center justify-center"><BuildingOffice2Icon className="w-5 h-5 text-teal-600" /></div>
+                <h3 className="font-semibold text-slate-800">สถิติตามชุมชน</h3>
+              </div>
+              <span className="text-xs text-slate-500 bg-slate-100 px-3 py-1 rounded-full">{Object.keys(stats.byCommunity).length} ชุมชน</span>
+            </div>
+            <div className="space-y-3 max-h-[400px] overflow-y-auto dashboard-scroll pr-2">
+              {(() => {
+                const sorted = Object.entries(stats.byCommunity).sort(([, a], [, b]) => b - a);
+                const maxCount = Math.max(...sorted.map(([, c]) => c), 1);
+                return sorted.map(([name, count], index) => {
+                  const percentage = (count / maxCount) * 100;
+                  const getColor = (c) => c <= 2 ? "from-yellow-400 to-amber-500" : c <= 5 ? "from-orange-400 to-orange-500" : c <= 10 ? "from-emerald-400 to-emerald-500" : "from-rose-400 to-rose-500";
+                  return (
+                    <div key={name} className="group">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 w-5">{index + 1}.</span>
+                          <span className="text-sm font-medium text-slate-700">{name}</span>
+                        </div>
+                        <span className="text-sm font-bold text-slate-800">{count}</span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className={`h-full bg-gradient-to-r ${getColor(count)} rounded-full transition-all duration-500 progress-bar`} style={{ width: `${Math.max(percentage, 5)}%` }}></div>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        </div>
+
+        {/* Processing Time Statistics */}
+        <div className="dashboard-section p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center"><ClockIcon className="w-5 h-5 text-orange-600" /></div>
+              <div>
+                <h3 className="font-semibold text-slate-800">สถิติการจัดการปัญหาตามระยะเวลา</h3>
+                <p className="text-sm text-slate-500">แสดง {stats.completed} รายการที่เสร็จสิ้น</p>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {["≤ 24 ชม.", "1-2 วัน", "2-3 วัน", "3-7 วัน", "7-15 วัน", "> 15 วัน"].map((timeRange, index) => {
+              const count = stats.byProcessingTime[timeRange] || 0;
+              const percentage = stats.completed > 0 ? (count / stats.completed) * 100 : 0;
+              const colors = ["from-emerald-400 to-emerald-500", "from-blue-400 to-blue-500", "from-indigo-400 to-indigo-500", "from-amber-400 to-amber-500", "from-orange-400 to-orange-500", "from-rose-400 to-rose-500"];
+              const bgColors = ["bg-emerald-50", "bg-blue-50", "bg-indigo-50", "bg-amber-50", "bg-orange-50", "bg-rose-50"];
+              const textColors = ["text-emerald-700", "text-blue-700", "text-indigo-700", "text-amber-700", "text-orange-700", "text-rose-700"];
+              return (
+                <div key={timeRange} className={`${bgColors[index]} rounded-xl p-4 text-center hover-lift`}>
+                  <div className={`text-3xl font-bold ${textColors[index]} mb-1`}>{count}</div>
+                  <div className="text-sm font-medium text-slate-600 mb-2">{timeRange}</div>
+                  <div className="h-1.5 bg-white/50 rounded-full overflow-hidden">
+                    <div className={`h-full bg-gradient-to-r ${colors[index]} rounded-full`} style={{ width: `${Math.max(percentage, 5)}%` }}></div>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">{percentage.toFixed(1)}%</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Category × Time Matrix */}
+        <div className="dashboard-section p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center"><ChartBarIcon className="w-5 h-5 text-violet-600" /></div>
+            <h3 className="font-semibold text-slate-800">สถิติการจัดการปัญหาตามประเภทและระยะเวลา</h3>
+          </div>
+          <div className="space-y-4 max-h-[500px] overflow-y-auto dashboard-scroll">
+            {Object.entries(stats.byCategoryAndTime).sort(([, a], [, b]) => Object.values(b).reduce((s, c) => s + c, 0) - Object.values(a).reduce((s, c) => s + c, 0)).map(([category, timeStats]) => {
+              const total = Object.values(timeStats).reduce((s, c) => s + c, 0);
+              return (
+                <div key={category} className="border border-slate-200 rounded-xl p-4 hover:border-violet-200 transition-all">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      {menu.find((m) => m.Prob_name === category)?.Prob_pic && <img src={menu.find((m) => m.Prob_name === category)?.Prob_pic} alt={category} className="w-6 h-6 object-contain" />}
+                      <h4 className="font-semibold text-slate-800">{category}</h4>
+                    </div>
+                    <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">{total} รายการ</span>
+                  </div>
+                  <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                    {["≤ 24 ชม.", "1-2 วัน", "2-3 วัน", "3-7 วัน", "7-15 วัน", "> 15 วัน"].map((t, i) => {
+                      const count = timeStats[t] || 0;
+                      const colors = ["bg-emerald-100 text-emerald-700 border-emerald-200", "bg-blue-100 text-blue-700 border-blue-200", "bg-indigo-100 text-indigo-700 border-indigo-200", "bg-amber-100 text-amber-700 border-amber-200", "bg-orange-100 text-orange-700 border-orange-200", "bg-rose-100 text-rose-700 border-rose-200"];
                       return (
-                        <div
-                          key={item?._id || item?.complaintId}
-                          className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-all bg-white"
-                        >
-                          <div className="h-40 bg-gray-100 relative overflow-hidden">
-                            {imageUrl ? (
-                              <img src={imageUrl} alt="ภาพปัญหา" className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">ไม่มีภาพ</div>
-                            )}
-                            <div className="absolute top-2 left-2 flex items-center gap-2">
-                              {categoryIcon && (
-                                <img src={categoryIcon} alt={item?.category || ''} className="w-8 h-8 bg-white/80 rounded-lg p-1 object-contain" />
-                              )}
-                              <span className={getStatusBadgeClass(item?.status)}>
-                                {item?.status || 'ไม่ระบุสถานะ'}
-                              </span>
-                            </div>
-                            <div className="absolute top-2 right-2">
-                              <span className="px-2 py-1 text-xs rounded-full bg-white/80 text-gray-700">
-                                {createdAt.toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: '2-digit' })}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="p-4">
-                            <div className="font-semibold text-gray-900 truncate mb-1">
-                              {item?.category || 'ไม่ระบุหมวดหมู่'}
-                            </div>
-                            {item?.community && (
-                              <div className="text-xs text-gray-500 mb-2">ชุมชน: {item.community}</div>
-                            )}
-                            <div className="text-sm text-gray-700 line-clamp-2 mb-3">
-                              {item?.detail || '-'}
-                            </div>
-                            <button
-                              className="btn btn-sm btn-outline w-full"
-                              disabled={!canOpenModal}
-                              onClick={() => { if (canOpenModal) setModalData({ ...item, blurImage: false }); }}
-                            >
-                              ดูรายละเอียด
-                            </button>
-                          </div>
+                        <div key={t} onClick={() => count > 0 && handleShowComplaints(category, t)} className={`px-3 py-2 rounded-lg border text-center cursor-pointer transition-all hover:shadow-md ${colors[i]}`}>
+                          <div className="text-lg font-bold">{count}</div>
+                          <div className="text-xs opacity-75">{t}</div>
                         </div>
                       );
                     })}
                   </div>
-
-                  {recentComplaintsSorted.length > RECENT_PAGE_SIZE && (
-                    <div className="flex items-center justify-center gap-3 mt-6">
-                      <button className="btn btn-sm btn-outline" disabled={recentPage <= 1} onClick={() => setRecentPage(p => p - 1)}>
-                        ก่อนหน้า
-                      </button>
-                      <span className="text-sm text-gray-600">หน้า {recentPage} / {recentTotalPages}</span>
-                      <button className="btn btn-sm btn-outline" disabled={recentPage >= recentTotalPages} onClick={() => setRecentPage(p => p + 1)}>
-                        ถัดไป
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
+                </div>
+              );
+            })}
           </div>
-
-          {/* Footer */}
-          <div className="card bg-gray-50 border border-gray-200">
-            <div className="card-body text-center py-4">
-              <p className="text-gray-500 text-sm">
-                📊 ข้อมูลสรุปประจำปีงบประมาณ {year} • อัปเดตล่าสุด: {new Date().toLocaleDateString('th-TH')}
-              </p>
-            </div>
-          </div>
-
         </div>
+
+        {/* Top Officers */}
+        <div className="dashboard-section p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center"><UserGroupIcon className="w-5 h-5 text-amber-600" /></div>
+              <div>
+                <h3 className="font-semibold text-slate-800">พนักงานที่จัดการเรื่องได้ดีที่สุด</h3>
+                <p className="text-sm text-slate-500">อันดับ 1-5 ตามคะแนนประสิทธิภาพ</p>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {Object.entries(stats.byOfficer).sort(([, a], [, b]) => {
+              if (a.totalAssigned < 3 && b.totalAssigned >= 3) return 1;
+              if (b.totalAssigned < 3 && a.totalAssigned >= 3) return -1;
+              return b.performanceScore - a.performanceScore || b.totalAssigned - a.totalAssigned;
+            }).slice(0, 5).map(([officerId, data], index) => {
+              const completionRate = data.totalAssigned > 0 ? (data.totalCompleted / data.totalAssigned) * 100 : 0;
+              const rankBadges = ["rank-badge-gold", "rank-badge-silver", "rank-badge-bronze"];
+              const rankIcons = ["🥇", "🥈", "🥉"];
+              return (
+                <div key={officerId} className="border border-slate-200 rounded-xl p-5 hover:shadow-lg hover:border-amber-200 transition-all group">
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className={`rank-badge ${rankBadges[index] || "bg-slate-100 text-slate-600"}`}>{index < 3 ? rankIcons[index] : `#${index + 1}`}</div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-slate-800 truncate">{officerNames[officerId] || `พนักงาน #${officerId.slice(-6)}`}</h4>
+                      <p className="text-sm text-slate-500">คะแนน: {data.performanceScore}/100</p>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-2xl font-bold text-blue-600">{data.totalCompleted}</div>
+                      <div className="text-xs text-slate-500">เสร็จสิ้น</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 text-center mb-3">
+                    <div className="bg-slate-50 rounded-lg p-2"><div className="font-bold text-slate-700">{data.totalAssigned}</div><div className="text-xs text-slate-500">รับงาน</div></div>
+                    <div className="bg-emerald-50 rounded-lg p-2"><div className="font-bold text-emerald-600">{completionRate.toFixed(0)}%</div><div className="text-xs text-slate-500">สำเร็จ</div></div>
+                    <div className="bg-blue-50 rounded-lg p-2"><div className="font-bold text-blue-600">{data.averageProcessingTime <= 0 ? "ทันที" : data.averageProcessingTime > 24 ? `${Math.round(data.averageProcessingTime / 24)} วัน` : `${data.averageProcessingTime} ชม.`}</div><div className="text-xs text-slate-500">เวลาเฉลี่ย</div></div>
+                  </div>
+                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full progress-bar ${data.performanceScore >= 80 ? "bg-gradient-to-r from-emerald-400 to-emerald-500" : data.performanceScore >= 60 ? "bg-gradient-to-r from-amber-400 to-amber-500" : "bg-gradient-to-r from-rose-400 to-rose-500"}`} style={{ width: `${data.performanceScore}%` }}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {Object.keys(stats.byOfficer).length === 0 && (
+            <div className="text-center py-12">
+              <UsersIcon className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+              <p className="text-slate-500">ยังไม่มีข้อมูลพนักงานที่ได้รับมอบหมายงาน</p>
+            </div>
+          )}
+        </div>
+
+        {/* Pie Chart & Top Reporters */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="dashboard-section p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-violet-200"><ChartBarIcon className="w-5 h-5 text-white" /></div>
+                <div><h3 className="font-semibold text-slate-800">การแจ้งปัญหาตามประเภท</h3><p className="text-xs text-slate-500">สัดส่วนการแจ้งปัญหาแต่ละประเภท</p></div>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-violet-50 to-purple-50 rounded-full border border-violet-100">
+                <UsersIcon className="w-4 h-4 text-violet-500" />
+                <span className="text-sm font-medium text-violet-700">{pieChartData.totalUniqueReporters} ผู้แจ้ง</span>
+              </div>
+            </div>
+            {pieChartData.pieData?.length > 0 ? (
+              <div className="flex flex-col lg:flex-row items-center gap-8">
+                <div className="relative flex-shrink-0">
+                  <div className="absolute inset-0 rounded-full opacity-30 blur-xl" style={{ background: `conic-gradient(${pieChartData.pieData.map((item, i) => { const startPct = pieChartData.pieData.slice(0, i).reduce((sum, d) => sum + (d.value / pieChartData.totalComplaints) * 100, 0); const endPct = startPct + (item.value / pieChartData.totalComplaints) * 100; return `${item.color} ${startPct}% ${endPct}%`; }).join(", ")})` }}></div>
+                  <div className="relative w-52 h-52">
+                    <svg className="w-full h-full transform -rotate-90 drop-shadow-lg" viewBox="0 0 100 100">
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="#f1f5f9" strokeWidth="16" />
+                      {(() => {
+                        let cumulative = 0;
+                        const radius = 40;
+                        const circumference = 2 * Math.PI * radius;
+                        return pieChartData.pieData.map((item, i) => {
+                          const pct = (item.value / pieChartData.totalComplaints) * 100;
+                          const strokeDasharray = `${(pct / 100) * circumference * 0.98} ${circumference}`;
+                          const strokeDashoffset = -(cumulative / 100) * circumference;
+                          cumulative += pct;
+                          return <circle key={i} cx="50" cy="50" r={radius} fill="none" stroke={`url(#gradient-${i})`} strokeWidth="16" strokeDasharray={strokeDasharray} strokeDashoffset={strokeDashoffset} strokeLinecap="round" className="transition-all duration-500" />;
+                        });
+                      })()}
+                      <defs>
+                        {pieChartData.pieData.map((item, i) => {
+                          const gradientColors = [["#3B82F6", "#1D4ED8"], ["#8B5CF6", "#6D28D9"], ["#EC4899", "#DB2777"], ["#06B6D4", "#0891B2"], ["#10B981", "#059669"], ["#F59E0B", "#D97706"]];
+                          const [start, end] = gradientColors[i % gradientColors.length];
+                          return <linearGradient key={i} id={`gradient-${i}`} x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor={start} /><stop offset="100%" stopColor={end} /></linearGradient>;
+                        })}
+                      </defs>
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="text-center bg-white/90 backdrop-blur-sm rounded-full w-24 h-24 flex flex-col items-center justify-center shadow-xl border border-white/50">
+                        <div className="text-3xl font-black bg-gradient-to-br from-slate-700 to-slate-900 bg-clip-text text-transparent">{pieChartData.totalComplaints}</div>
+                        <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wide">เรื่อง</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex-1 w-full">
+                  <div className="grid grid-cols-1 gap-2">
+                    {pieChartData.pieData.slice(0, 6).map((item, i) => {
+                      const bgColors = ["hover:bg-blue-50 hover:border-blue-200", "hover:bg-violet-50 hover:border-violet-200", "hover:bg-pink-50 hover:border-pink-200", "hover:bg-cyan-50 hover:border-cyan-200", "hover:bg-emerald-50 hover:border-emerald-200", "hover:bg-amber-50 hover:border-amber-200"];
+                      return (
+                        <div key={i} className={`group flex items-center gap-3 p-3 rounded-xl border border-slate-100 bg-white transition-all duration-300 cursor-pointer ${bgColors[i % bgColors.length]}`}>
+                          <div className="relative"><div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-md transition-transform group-hover:scale-110" style={{ background: `linear-gradient(135deg, ${item.color}, ${item.color}dd)`, boxShadow: `0 4px 12px ${item.color}40` }}>{item.value}</div></div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-slate-700 truncate group-hover:text-slate-900">{item.name}</div>
+                            <div className="flex items-center gap-2 mt-0.5"><div className="h-1.5 flex-1 bg-slate-100 rounded-full overflow-hidden max-w-[100px]"><div className="h-full rounded-full transition-all duration-500" style={{ width: `${item.percentage}%`, background: `linear-gradient(90deg, ${item.color}, ${item.color}aa)` }}></div></div></div>
+                          </div>
+                          <div className="px-2.5 py-1 rounded-lg text-xs font-bold transition-colors" style={{ backgroundColor: `${item.color}15`, color: item.color }}>{item.percentage}%</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-slate-100 flex items-center justify-center"><ChartBarIcon className="w-10 h-10 text-slate-300" /></div>
+                <p className="text-slate-500 font-medium">ไม่มีข้อมูลสำหรับแสดง</p>
+              </div>
+            )}
+          </div>
+
+          <div className="dashboard-section p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-cyan-50 flex items-center justify-center"><UsersIcon className="w-5 h-5 text-cyan-600" /></div>
+              <h3 className="font-semibold text-slate-800">ผู้แจ้งบ่อยที่สุด</h3>
+            </div>
+            {topReporters.length === 0 ? (
+              <div className="text-center py-12"><UsersIcon className="w-16 h-16 text-slate-300 mx-auto mb-4" /><p className="text-slate-500">ไม่มีข้อมูลผู้แจ้ง</p></div>
+            ) : (
+              <div className="space-y-3">
+                {topReporters.map((reporter, index) => {
+                  const rankBadges = ["rank-badge-gold", "rank-badge-silver", "rank-badge-bronze"];
+                  const rankIcons = ["🥇", "🥈", "🥉"];
+                  return (
+                    <div key={reporter.phone} className="border border-slate-200 rounded-xl p-4 hover:border-cyan-200 hover:shadow-md transition-all">
+                      <div className="flex items-center gap-4">
+                        <div className={`rank-badge ${rankBadges[index] || "bg-slate-100 text-slate-600"}`}>{index < 3 ? rankIcons[index] : `#${index + 1}`}</div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-semibold text-slate-800 truncate">{reporter.name}</h4>
+                          <p className="text-sm text-slate-500">{reporter.phone}</p>
+                        </div>
+                        <div className="text-right"><div className="text-2xl font-bold text-cyan-600">{reporter.count}</div><div className="text-xs text-slate-500">ครั้ง</div></div>
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-1.5">
+                        {(() => {
+                          const cats = {};
+                          reporter.complaints.forEach((c) => { if (c.category) cats[c.category] = (cats[c.category] || 0) + 1; });
+                          return Object.entries(cats).sort(([, a], [, b]) => b - a).slice(0, 3).map(([cat, cnt]) => (
+                            <span key={cat} className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded-full">{cat} ({cnt})</span>
+                          ));
+                        })()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Recent Complaints */}
+        <div className="dashboard-section p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center"><DocumentTextIcon className="w-5 h-5 text-slate-600" /></div>
+              <div>
+                <h3 className="font-semibold text-slate-800">รายการปัญหาล่าสุด</h3>
+                <p className="text-sm text-slate-500">แสดง {Math.min(RECENT_PAGE_SIZE, filteredComplaints.length)} จาก {filteredComplaints.length} รายการ</p>
+              </div>
+            </div>
+            <button onClick={() => router.push("/admin/manage-complaints")} className="px-4 py-2 bg-blue-50 text-blue-600 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2">ดูทั้งหมด<ChevronRightIcon className="w-4 h-4" /></button>
+          </div>
+
+          {filteredComplaints.length === 0 ? (
+            <div className="p-12 text-center"><DocumentTextIcon className="w-16 h-16 text-slate-300 mx-auto mb-4" /><p className="text-slate-500">ไม่มีข้อมูลในกรอบเวลาที่เลือก</p></div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {filteredComplaints
+                  .slice()
+                  .sort((a, b) => new Date(b.timestamp || b.createdAt) - new Date(a.timestamp || a.createdAt))
+                  .slice((recentPage - 1) * RECENT_PAGE_SIZE, recentPage * RECENT_PAGE_SIZE)
+                  .map((complaint) => {
+                    const categoryIcon = menu.find((m) => m.Prob_name === complaint.category);
+                    const daysSince = Math.floor((new Date() - new Date(complaint.timestamp || complaint.createdAt)) / (1000 * 60 * 60 * 24));
+                    const timeAgo = daysSince === 0 ? "วันนี้" : daysSince === 1 ? "เมื่อวาน" : `${daysSince} วันที่แล้ว`;
+                    return (
+                      <div key={complaint._id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-md hover:border-blue-200 transition-all group">
+                        {Array.isArray(complaint.images) && complaint.images.length > 0 ? (
+                          <div className="h-40 bg-slate-100 cursor-pointer relative overflow-hidden" onClick={() => openDetailModal(complaint)}>
+                            <img src={complaint.images[0]} alt="ภาพปัญหา" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </div>
+                        ) : (
+                          <div className="h-40 bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center"><DocumentTextIcon className="w-12 h-12 text-slate-300" /></div>
+                        )}
+                        <div className="p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <span className={`badge-status ${getStatusColor(complaint.status)}`}>{getStatusText(complaint.status)}</span>
+                            <div className="flex items-center gap-1.5">
+                              {categoryIcon?.Prob_pic && <img src={categoryIcon.Prob_pic} alt="" className="w-5 h-5 object-contain" />}
+                              <span className="text-xs text-slate-500">{complaint.category || "ไม่ระบุ"}</span>
+                            </div>
+                          </div>
+                          <h4 className="font-medium text-slate-800 mb-2 line-clamp-2 cursor-pointer hover:text-blue-600 transition-colors min-h-[48px]" onClick={() => openDetailModal(complaint)}>
+                            {complaint.detail || "ไม่มีรายละเอียด"}
+                          </h4>
+                          <div className="flex items-center justify-between text-xs text-slate-400 mb-4">
+                            <span>{timeAgo}</span>
+                            <span className="text-slate-500 truncate max-w-[120px]">{complaint.community || "ไม่ระบุชุมชน"}</span>
+                          </div>
+                          <button onClick={() => openDetailModal(complaint)} className="w-full px-4 py-2.5 bg-slate-50 text-slate-600 text-sm font-medium rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors flex items-center justify-center gap-2">
+                            <EyeIcon className="w-4 h-4" />ดูรายละเอียด
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {filteredComplaints.length > RECENT_PAGE_SIZE && (
+                <div className="flex items-center justify-center gap-2 mt-6 pt-6 border-t border-slate-100">
+                  <button onClick={() => setRecentPage((p) => Math.max(1, p - 1))} disabled={recentPage === 1} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${recentPage === 1 ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-white text-slate-700 hover:bg-slate-100 border border-slate-200"}`}>ก่อนหน้า</button>
+                  <span className="text-sm text-slate-500 px-4">หน้า {recentPage} / {Math.ceil(filteredComplaints.length / RECENT_PAGE_SIZE)}</span>
+                  <button onClick={() => setRecentPage((p) => (p * RECENT_PAGE_SIZE < filteredComplaints.length ? p + 1 : p))} disabled={recentPage * RECENT_PAGE_SIZE >= filteredComplaints.length} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${recentPage * RECENT_PAGE_SIZE >= filteredComplaints.length ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-white text-slate-700 hover:bg-slate-100 border border-slate-200"}`}>ถัดไป</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
       </div>
 
-      {modalData && (
-        <CardModalDetail
-          modalData={modalData}
-          onClose={() => setModalData(null)}
-        />
+      <ComplaintsModal />
+      {showDetailModal && selectedComplaintDetail && (
+        <CardModalDetail modalData={selectedComplaintDetail} onClose={closeDetailModal} />
       )}
-    </>
+    </div>
   );
 }
