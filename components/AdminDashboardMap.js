@@ -715,7 +715,7 @@ const AdminDashboardMap = ({ complaints, polygons = [] }) => {
                                 background-color: rgba(255, 255, 255, 0.95);
                                 border: 2px solid ${polygon.color || "#3b82f6"};
                                 border-radius: 6px;
-                                padding: 3px 6px;
+                                padding: 2px 8px;
                                 font-size: 11px;
                                 font-weight: 600;
                                 color: ${polygon.color || "#3b82f6"};
@@ -723,20 +723,17 @@ const AdminDashboardMap = ({ complaints, polygons = [] }) => {
                                 box-shadow: 0 2px 6px rgba(0,0,0,0.25);
                                 pointer-events: none;
                                 text-align: center;
-                                min-width: 110px;
-                                max-width: 200px;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
+                                display: inline-block;
                                 z-index: 1000;
                                 cursor: help;
                                 user-select: none;
-                                line-height: 1.2;
+                                line-height: 1.4;
                               " title="${polygon.name}">
                                 ${shortenedName}
                               </div>
                             `,
-                              iconSize: [200, 28],
-                              iconAnchor: [100, 14],
+                              iconSize: null,
+                              iconAnchor: [50, 12],
                             })}
                           />
                         )}
@@ -1042,7 +1039,7 @@ const AdminDashboardMap = ({ complaints, polygons = [] }) => {
                           background-color: rgba(255, 255, 255, 0.95);
                           border: 2px solid ${polygon.color || "#3b82f6"};
                           border-radius: 6px;
-                          padding: 3px 6px;
+                          padding: 2px 8px;
                           font-size: 11px;
                           font-weight: 600;
                           color: ${polygon.color || "#3b82f6"};
@@ -1050,20 +1047,17 @@ const AdminDashboardMap = ({ complaints, polygons = [] }) => {
                           box-shadow: 0 2px 6px rgba(0,0,0,0.25);
                           pointer-events: none;
                           text-align: center;
-                          min-width: 110px;
-                          max-width: 200px;
-                          overflow: hidden;
-                          text-overflow: ellipsis;
+                          display: inline-block;
                           z-index: 1000;
                           cursor: help;
                           user-select: none;
-                          line-height: 1.2;
+                          line-height: 1.4;
                         " title="${polygon.name}">
                           ${shortenedName}
                         </div>
                       `,
-                          iconSize: [200, 28],
-                          iconAnchor: [100, 14],
+                          iconSize: null,
+                          iconAnchor: [50, 12],
                         })}
                       />
                     )}
