@@ -6,12 +6,13 @@ type BeforeInstallPromptEvent = Event & {
 
 import React, { useEffect, useState, useMemo } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useMenuStore, MenuItem } from "@/stores/useMenuStore";
 import ComplaintFormModal from "@/components/ComplaintFormModal";
 import Footer from "@/components/Footer";
 import SummaryStats from "@/components/SummaryStats";
 
-import { Download } from "lucide-react";
+import { Download, BarChart3 } from "lucide-react";
 
 export default function Home() {
 
@@ -97,6 +98,15 @@ export default function Home() {
         <span className="animate-pulse text-indigo-500">|</span>
       </div>
       <SummaryStats />
+      <div className="flex justify-center mt-4 px-4">
+        <Link
+          href="/roadmap"
+          className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-teal-700 text-white text-sm font-medium shadow-sm transition duration-200 hover:bg-teal-800 hover:scale-105"
+        >
+          <BarChart3 size={16} />
+          สรุปผลแบบสำรวจ &amp; แนวทางพัฒนา
+        </Link>
+      </div>
       <div className="flex-1 px-4 pt-8 pb-20 w-full max-w-screen-sm mx-auto">
         {menuLoading ? (
           <div className="flex justify-center items-center h-60">
